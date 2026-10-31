@@ -3,145 +3,161 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/black">
+    android:background="#0A0A0E">
 
+    <!-- Visor da Câmera em Tela Cheia -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Barra de Status da IA e Sensores -->
+    <!-- Degradê Superior -->
+    <View
+        android:id="@+id/topScrim"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:background="@drawable/bg_dark_gradient"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Barra de Ferramentas Superior (Minimalista) -->
     <LinearLayout
-        android:id="@+id/panelAiStatus"
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#80000000"
+        android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="8dp"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="28dp"
         app:layout_constraintTop_toTopOf="parent">
 
-        <TextView
-            android:id="@+id/txtAiEngine"
+        <!-- Botão Engrenagem (Abre Menu Categorizado) -->
+        <ImageButton
+            android:id="@+id/btnSettings"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Configurações"
+            android:src="@android:drawable/ic_menu_preferences"
+            app:tint="#FFFFFF" />
+
+        <!-- Pílula Central de Troca Rápida de Resolução Inteligente -->
+        <Button
+            android:id="@+id/btnQuickResolution"
+            style="@style/Widget.Material3.Button.TonalButton"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="38dp"
+            android:layout_marginHorizontal="16dp"
             android:layout_weight="1"
-            android:text="IA CENA: Analisando..."
-            android:textColor="#00E676"
+            android:backgroundTint="#40FFFFFF"
+            android:text="50 MP • 8160x6120"
+            android:textColor="#FFFFFF"
             android:textSize="11sp"
             android:textStyle="bold" />
 
+        <!-- Indicador de Status IA (HDR / EIS) -->
         <TextView
-            android:id="@+id/txtFilterStatus"
+            android:id="@+id/txtAiBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="FILTRO: NENHUM"
-            android:textColor="#FFD600"
-            android:textSize="11sp" />
+            android:background="@drawable/bg_dark_gradient"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp"
+            android:text="IA • HDR"
+            android:textColor="#00E676"
+            android:textSize="10sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Botões Rápidos de Configurações Técnicas -->
-    <LinearLayout
-        android:id="@+id/panelQuickSettings"
+    <!-- Degradê Inferior -->
+    <View
+        android:id="@+id/bottomScrim"
         android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:background="@drawable/bg_dark_gradient_bottom"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+    <!-- Seletor Deslizante de Modos (FOTO / VÍDEO) -->
+    <LinearLayout
+        android:id="@+id/modeSelectorLayout"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="#40000000"
+        android:layout_marginBottom="24dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:padding="4dp"
-        app:layout_constraintTop_toBottomOf="@id/panelAiStatus">
+        app:layout_constraintBottom_toTopOf="@id/shutterLayout"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
 
-        <Button
-            android:id="@+id/btnTogglePhotoFormat"
-            style="@style/Widget.Material3.Button.TonalButton"
+        <TextView
+            android:id="@+id/tabPhoto"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_margin="2dp"
-            android:text="FOTO: JPG"
-            android:textSize="10sp" />
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="6dp"
+            android:text="FOTO"
+            android:textColor="#FFD600"
+            android:textSize="13sp"
+            android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/btnToggleCodec"
-            style="@style/Widget.Material3.Button.TonalButton"
+        <TextView
+            android:id="@+id/tabVideo"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_margin="2dp"
-            android:text="CODEC: H.264"
-            android:textSize="10sp" />
-
-        <Button
-            android:id="@+id/btnToggleAudioBitrate"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_margin="2dp"
-            android:text="ÁUDIO: 192K"
-            android:textSize="10sp" />
-
-        <Button
-            android:id="@+id/btnCycleND"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_margin="2dp"
-            android:text="ND: OFF"
-            android:textSize="10sp" />
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="6dp"
+            android:text="VÍDEO"
+            android:textColor="#88FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Barra de Controle Manual (EV / Exposição) -->
-    <SeekBar
-        android:id="@+id/exposureBar"
-        android:layout_width="260dp"
+    <!-- Controles Inferiores de Captura -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/shutterLayout"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:max="100"
-        android:progress="50"
-        app:layout_constraintBottom_toTopOf="@id/btnCapture"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        android:layout_marginBottom="36dp"
+        app:layout_constraintBottom_toBottomOf="parent">
 
-    <!-- Botão Foto -->
-    <Button
-        android:id="@+id/btnCapture"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:layout_marginBottom="28dp"
-        android:backgroundTint="#FFFFFF"
-        android:text="DISPARO"
-        android:textColor="#000000"
-        android:textSize="9sp"
-        app:cornerRadius="36dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        <!-- Botão Disparador Central -->
+        <FrameLayout
+            android:id="@+id/btnShutterContainer"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
 
-    <!-- Botão Vídeo -->
-    <Button
-        android:id="@+id/btnRecord"
-        android:layout_width="60dp"
-        android:layout_height="60dp"
-        android:backgroundTint="#D50000"
-        android:text="REC"
-        android:textColor="#FFFFFF"
-        android:textSize="10sp"
-        app:cornerRadius="30dp"
-        app:layout_constraintBottom_toBottomOf="@id/btnCapture"
-        app:layout_constraintEnd_toStartOf="@id/btnCapture"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="@id/btnCapture" />
+            <View
+                android:layout_width="84dp"
+                android:layout_height="84dp"
+                android:background="@android:drawable/btn_default"
+                android:backgroundTint="#33FFFFFF" />
 
-    <!-- Botão Alternar Traseira / Frontal -->
-    <Button
-        android:id="@+id/btnSwitch"
-        android:layout_width="60dp"
-        android:layout_height="60dp"
-        android:backgroundTint="#37474F"
-        android:text="GIRAR"
-        android:textColor="#FFFFFF"
-        android:textSize="9sp"
-        app:cornerRadius="30dp"
-        app:layout_constraintBottom_toBottomOf="@id/btnCapture"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@id/btnCapture"
-        app:layout_constraintTop_toTopOf="@id/btnCapture" />
+            <View
+                android:id="@+id/shutterInnerCircle"
+                android:layout_width="66dp"
+                android:layout_height="66dp"
+                android:layout_gravity="center"
+                android:background="@android:drawable/btn_default"
+                android:backgroundTint="#FFFFFF" />
+        </FrameLayout>
+
+        <!-- Botão Girar Câmera (Traseira 50MP / Frontal 8MP) -->
+        <ImageButton
+            android:id="@+id/btnFlipCamera"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_marginEnd="36dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Alternar Câmera"
+            android:src="@android:drawable/ic_menu_rotate"
+            app:layout_constraintBottom_toBottomOf="@id/btnShutterContainer"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="@id/btnShutterContainer"
+            app:tint="#FFFFFF" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

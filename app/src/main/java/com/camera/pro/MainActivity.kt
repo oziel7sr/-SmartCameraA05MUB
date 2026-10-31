@@ -2,18 +2,24 @@ package com.camera.pro
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
-import android.view.MotionEvent
-import android.widget.Button
-import android.widget.SeekBar
-import android.widget.TextView
-import android.widget.Toast
+import android.util.Range
+import android.util.Size
+import android.view.View
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.*
@@ -21,259 +27,203 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.switchmaterial.SwitchMaterial
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 class MainActivity : AppCompatActivity() {
 
-    // Gerenciamento da Câmera
+    private lateinit var viewFinder: PreviewView
+    private lateinit var btnQuickResolution: Button
+    private lateinit var shutterInnerCircle: View
+    private lateinit var tabPhoto: TextView
+    private lateinit var tabVideo: TextView
+    private lateinit var cameraExecutor: ExecutorService
+
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var cameraControl: CameraControl? = null
+    private var cameraInfo: CameraInfo? = null
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
-    private var camera: Camera? = null
-    private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-    private lateinit var cameraExecutor: ExecutorService
 
-    // Estados e Configurações Profissionais
-    enum class PhotoFormat { JPG, JPEG, PNG, RAW }
-    enum class VideoCodec { H264_MP4, HEVC_MKV }
-    enum class FilterND { OFF, ND4, ND8, ND16 }
+    // Estados da Câmera
+    private var isVideoMode = false
+    private var isBackCamera = true
+    private var selectedTimerSeconds = 0
+    private var eisEnabled = true
+    private var hdrEnabled = true
+    private var noiseReductionEnabled = true
+    private var selectedFps = 30
+    private var currentPhotoFormat = "JPG"
+    private var currentVideoCodec = "H.264"
+    private var currentAudioBitrate = 192000
 
-    private var currentPhotoFormat = PhotoFormat.JPG
-    private var currentVideoCodec = VideoCodec.H264_MP4
-    private var currentAudioBitrate = 192000 // 192 kbps padrão
-    private var currentFilterND = FilterND.OFF
-
-    // Componentes Visuais
-    private lateinit var viewFinder: PreviewView
-    private lateinit var btnRecord: Button
-    private lateinit var txtAiEngine: TextView
-    private lateinit var txtFilterStatus: TextView
+    // Resolução Selecionada
+    private var activeResolution = Size(8160, 6120) // 50 MP nativo do A05
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         viewFinder = findViewById(R.id.viewFinder)
-        btnRecord = findViewById(R.id.btnRecord)
-        txtAiEngine = findViewById(R.id.txtAiEngine)
-        txtFilterStatus = findViewById(R.id.txtFilterStatus)
+        btnQuickResolution = findViewById(R.id.btnQuickResolution)
+        shutterInnerCircle = findViewById(R.id.shutterInnerCircle)
+        tabPhoto = findViewById(R.id.tabPhoto)
+        tabVideo = findViewById(R.id.tabVideo)
 
-        val btnCapture: Button = findViewById(R.id.btnCapture)
-        val btnSwitch: Button = findViewById(R.id.btnSwitch)
-        val btnTogglePhotoFormat: Button = findViewById(R.id.btnTogglePhotoFormat)
-        val btnToggleCodec: Button = findViewById(R.id.btnToggleCodec)
-        val btnToggleAudioBitrate: Button = findViewById(R.id.btnToggleAudioBitrate)
-        val btnCycleND: Button = findViewById(R.id.btnCycleND)
-        val exposureBar: SeekBar = findViewById(R.id.exposureBar)
+        val btnSettings: ImageButton = findViewById(R.id.btnSettings)
+        val btnFlipCamera: ImageButton = findViewById(R.id.btnFlipCamera)
+        val btnShutterContainer: FrameLayout = findViewById(R.id.btnShutterContainer)
+
+        cameraExecutor = Executors.newSingleThreadExecutor()
 
         if (allPermissionsGranted()) {
-            startCamera()
+            setupCamera()
         } else {
             ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, 10)
         }
 
-        // 1. Alternador de Formato de Foto (JPG -> JPEG -> PNG -> RAW)
-        btnTogglePhotoFormat.setOnClickListener {
-            currentPhotoFormat = when (currentPhotoFormat) {
-                PhotoFormat.JPG -> PhotoFormat.JPEG
-                PhotoFormat.JPEG -> PhotoFormat.PNG
-                PhotoFormat.PNG -> PhotoFormat.RAW
-                PhotoFormat.RAW -> PhotoFormat.JPG
-            }
-            btnTogglePhotoFormat.text = "FOTO: ${currentPhotoFormat.name}"
-            Toast.makeText(this, "Modo de Saída: ${currentPhotoFormat.name}", Toast.LENGTH_SHORT).show()
-        }
+        // Alternância Deslizante entre Foto e Vídeo
+        tabPhoto.setOnClickListener { switchMode(video = false) }
+        tabVideo.setOnClickListener { switchMode(video = true) }
 
-        // 2. Alternador de Codec e Contêiner de Vídeo
-        btnToggleCodec.setOnClickListener {
-            currentVideoCodec = if (currentVideoCodec == VideoCodec.H264_MP4) {
-                VideoCodec.HEVC_MKV
+        // Botão de Engrenagem (Abre Modal de Configurações)
+        btnSettings.setOnClickListener { showSettingsDialog() }
+
+        // Troca Rápida de Resolução Inteligente
+        btnQuickResolution.setOnClickListener { showResolutionPicker() }
+
+        // Disparador Unificado (Foto ou Vídeo)
+        btnShutterContainer.setOnClickListener {
+            if (selectedTimerSeconds > 0) {
+                btnQuickResolution.text = "Disparando em $selectedTimerSeconds s..."
+                Handler(Looper.getMainLooper()).postDelayed({
+                    executeCaptureAction()
+                }, selectedTimerSeconds * 1000L)
             } else {
-                VideoCodec.H264_MP4
+                executeCaptureAction()
             }
-            val label = if (currentVideoCodec == VideoCodec.H264_MP4) "H.264 (MP4)" else "H.265 (MKV)"
-            btnToggleCodec.text = "VÍDEO: $label"
-            startCamera() // Reinicializa com o novo codec selecionado
         }
 
-        // 3. Taxas de Bits do Áudio (128k -> 192k -> 256k -> 320k)
-        btnToggleAudioBitrate.setOnClickListener {
-            currentAudioBitrate = when (currentAudioBitrate) {
-                128000 -> 192000
-                192000 -> 256000
-                256000 -> 320000
-                else -> 128000
-            }
-            btnToggleAudioBitrate.text = "ÁUDIO: ${currentAudioBitrate / 1000}K"
+        // Girar Câmera
+        btnFlipCamera.setOnClickListener {
+            isBackCamera = !isBackCamera
+            updateResolutionForCamera()
+            setupCamera()
         }
-
-        // 4. Gerenciamento do Filtro de Densidade Neutra (ND Digital)
-        btnCycleND.setOnClickListener {
-            currentFilterND = when (currentFilterND) {
-                FilterND.OFF -> FilterND.ND4
-                FilterND.ND4 -> FilterND.ND8
-                FilterND.ND8 -> FilterND.ND16
-                FilterND.ND16 -> FilterND.OFF
-            }
-            btnCycleND.text = "ND: ${currentFilterND.name}"
-            applyDigitalNDFilter()
-        }
-
-        btnCapture.setOnClickListener { takePhoto() }
-        btnRecord.setOnClickListener { captureVideo() }
-
-        btnSwitch.setOnClickListener {
-            cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_BACK_CAMERA) {
-                CameraSelector.DEFAULT_FRONT_CAMERA
-            } else {
-                CameraSelector.DEFAULT_BACK_CAMERA
-            }
-            startCamera()
-        }
-
-        // Toque na tela para foco dinâmico e medição pontual
-        viewFinder.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) {
-                val factory = viewFinder.meteringPointFactory
-                val point = factory.createPoint(event.x, event.y)
-                val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
-                    .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-                camera?.cameraControl?.startFocusAndMetering(action)
-            }
-            true
-        }
-
-        // Barra de compensação manual de exposição
-        exposureBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                val exposureState = camera?.cameraInfo?.exposureState
-                if (exposureState?.isExposureCompensationSupported == true) {
-                    val range = exposureState.exposureCompensationRange
-                    val mapped = range.lower + ((range.upper - range.lower) * (progress / 100f)).toInt()
-                    camera?.cameraControl?.setExposureCompensationIndex(mapped)
-                }
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
-
-        cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
-    private fun startCamera() {
+    private fun switchMode(video: Boolean) {
+        if (isVideoMode == video) return
+        isVideoMode = video
+
+        if (isVideoMode) {
+            tabVideo.setTextColor(Color.parseColor("#FF1744"))
+            tabPhoto.setTextColor(Color.parseColor("#88FFFFFF"))
+            shutterInnerCircle.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_red_dark)
+            btnQuickResolution.text = "1080p • $selectedFps FPS"
+        } else {
+            tabPhoto.setTextColor(Color.parseColor("#FFD600"))
+            tabVideo.setTextColor(Color.parseColor("#88FFFFFF"))
+            shutterInnerCircle.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.white)
+            btnQuickResolution.text = if (isBackCamera) "50 MP • 8160x6120" else "8 MP • 3264x2448"
+        }
+        setupCamera()
+    }
+
+    private fun executeCaptureAction() {
+        if (isVideoMode) {
+            recordVideo()
+        } else {
+            takePhoto()
+        }
+    }
+
+    private fun updateResolutionForCamera() {
+        activeResolution = if (isBackCamera) {
+            Size(8160, 6120) // 50 MP Traseiro
+        } else {
+            Size(3264, 2448) // 8 MP Frontal
+        }
+        val label = if (isBackCamera) "50 MP • 8160x6120" else "8 MP • 3264x2448"
+        btnQuickResolution.text = if (!isVideoMode) label else "1080p • $selectedFps FPS"
+    }
+
+    private fun setupCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
+            cameraProvider = cameraProviderFuture.get()
+
+            val selector = if (isBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
 
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(viewFinder.surfaceProvider)
             }
 
-            imageCapture = ImageCapture.Builder()
+            // Injeção de Parâmetros Avançados de Hardware (EIS, Redução de Ruído e FPS)
+            val imageCaptureBuilder = ImageCapture.Builder()
+                .setTargetResolution(activeResolution)
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .build()
 
-            // Motor de IA em Tempo Real (analisa frames em background)
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, RealtimeAIEngine { scene, avgLuma ->
-                        runOnUiThread {
-                            txtAiEngine.text = "IA CENA: $scene (Luma: ${avgLuma.toInt()})"
-                            autoAdjustHardware(avgLuma)
-                        }
-                    })
-                }
+            val camera2Extender = Camera2Interop.Extender(imageCaptureBuilder)
 
-            // Gravador com resolução nativa do A05 (1080p FHD)
+            // Ativação da Estabilização Eletrônica (EIS) nativa
+            if (eisEnabled) {
+                camera2Extender.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                )
+            }
+
+            // Supressão de ruído IA no hardware MediaTek
+            if (noiseReductionEnabled) {
+                camera2Extender.setCaptureRequestOption(
+                    CaptureRequest.NOISE_REDUCTION_MODE,
+                    CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                )
+            }
+
+            // Frame Rate Travado para Vídeo (30, 50 ou 60 FPS)
+            camera2Extender.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                Range(selectedFps, selectedFps)
+            )
+
+            imageCapture = imageCaptureBuilder.build()
+
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                 .build()
             videoCapture = VideoCapture.withOutput(recorder)
 
             try {
-                cameraProvider.unbindAll()
-                camera = cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture, imageAnalyzer, videoCapture
-                )
-            } catch (exc: Exception) {
-                Toast.makeText(this, "Erro no hardware de câmera: ${exc.message}", Toast.LENGTH_SHORT).show()
+                cameraProvider?.unbindAll()
+                val camera = if (isVideoMode) {
+                    cameraProvider?.bindToLifecycle(this, selector, preview, videoCapture)
+                } else {
+                    cameraProvider?.bindToLifecycle(this, selector, preview, imageCapture)
+                }
+                cameraControl = camera?.cameraControl
+                cameraInfo = camera?.cameraInfo
+            } catch (e: Exception) {
+                Toast.makeText(this, "Erro ao inicializar sensor: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    // Auto-ajuste de câmera guiado pela análise de IA
-    private fun autoAdjustHardware(luma: Double) {
-        if (currentFilterND != FilterND.OFF) return // Não interfere se o usuário travou o filtro ND
-        val cameraControl = camera?.cameraControl ?: return
-
-        // Se a luz for extrema (estourando os brancos), a IA reduz a exposição automaticamente
-        if (luma > 210) {
-            cameraControl.setExposureCompensationIndex(-2)
-        } else if (luma < 40) {
-            cameraControl.setExposureCompensationIndex(2)
-        }
-    }
-
-    // Aplicação da densidade neutra computacional
-    private fun applyDigitalNDFilter() {
-        val control = camera?.cameraControl ?: return
-        when (currentFilterND) {
-            FilterND.OFF -> {
-                control.setExposureCompensationIndex(0)
-                txtFilterStatus.text = "FILTRO: DESATIVADO"
-            }
-            FilterND.ND4 -> {
-                control.setExposureCompensationIndex(-2) // Corta 2 f-stops de luz
-                txtFilterStatus.text = "FILTRO: ND4 (2 Stops)"
-            }
-            FilterND.ND8 -> {
-                control.setExposureCompensationIndex(-3) // Corta 3 f-stops
-                txtFilterStatus.text = "FILTRO: ND8 (3 Stops)"
-            }
-            FilterND.ND16 -> {
-                control.setExposureCompensationIndex(-4) // Corta 4 f-stops (luz forte)
-                txtFilterStatus.text = "FILTRO: ND16 (Extremo)"
-            }
-        }
-    }
-
     private fun takePhoto() {
-        val imageCapture = imageCapture ?: return
+        val capture = imageCapture ?: return
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
-
-        if (currentPhotoFormat == PhotoFormat.PNG) {
-            // Captura o buffer em memória e codifica sem perdas (PNG)
-            imageCapture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val bitmap = imageProxyToBitmap(image)
-                    image.close()
-                    saveBitmapAsPng(bitmap, "A05_PRO_$timestamp.png")
-                }
-                override fun onError(exception: ImageCaptureException) {
-                    runOnUiThread { Toast.makeText(baseContext, "Erro PNG", Toast.LENGTH_SHORT).show() }
-                }
-            })
-            return
-        }
-
-        // Fluxo para JPEG, JPG ou RAW simulado
-        val extension = when (currentPhotoFormat) {
-            PhotoFormat.RAW -> "dng"
-            PhotoFormat.JPEG -> "jpeg"
-            else -> "jpg"
-        }
+        val ext = currentPhotoFormat.lowercase()
 
         val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "A05_PRO_$timestamp.$extension")
-            put(MediaStore.MediaColumns.MIME_TYPE, if (extension == "dng") "image/x-adobe-dng" else "image/jpeg")
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "A05_IMG_$timestamp.$ext")
+            put(MediaStore.MediaColumns.MIME_TYPE, if (ext == "png") "image/png" else "image/jpeg")
             if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/A05-ProCamera")
             }
@@ -285,96 +235,159 @@ class MainActivity : AppCompatActivity() {
             contentValues
         ).build()
 
-        imageCapture.takePicture(
+        capture.takePicture(
             outputOptions, ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onError(exc: ImageCaptureException) {
-                    Toast.makeText(baseContext, "Falha na captura: ${exc.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(baseContext, "Erro na captura", Toast.LENGTH_SHORT).show()
                 }
 
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Toast.makeText(baseContext, "Salvo em: $extension".uppercase(), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(baseContext, "Foto salva em $activeResolution ($ext)", Toast.LENGTH_SHORT).show()
                 }
             }
         )
     }
 
-    private fun captureVideo() {
-        val videoCapture = this.videoCapture ?: return
-        val curRecording = recording
-        if (curRecording != null) {
-            curRecording.stop()
+    private fun recordVideo() {
+        val videoCap = videoCapture ?: return
+        val currentRecording = recording
+
+        if (currentRecording != null) {
+            currentRecording.stop()
             recording = null
-            btnRecord.text = "REC"
+            shutterInnerCircle.backgroundTintList = ContextCompat.getColorStateList(this, android.R.color.holo_red_dark)
             return
         }
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
-        val isMkv = (currentVideoCodec == VideoCodec.HEVC_MKV)
+        val isMkv = (currentVideoCodec == "H.265")
         val ext = if (isMkv) "mkv" else "mp4"
-        val mime = if (isMkv) "video/x-matroska" else "video/mp4"
 
         val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "A05_PRO_$timestamp.$ext")
-            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "A05_VID_$timestamp.$ext")
+            put(MediaStore.MediaColumns.MIME_TYPE, if (isMkv) "video/x-matroska" else "video/mp4")
             if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
                 put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/A05-ProCamera")
             }
         }
 
-        val mediaStoreOutputOptions = MediaStoreOutputOptions.Builder(
+        val mediaOptions = MediaStoreOutputOptions.Builder(
             contentResolver,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         ).setContentValues(contentValues).build()
 
-        recording = videoCapture.output
-            .prepareRecording(this, mediaStoreOutputOptions)
+        recording = videoCap.output
+            .prepareRecording(this, mediaOptions)
             .apply {
                 if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                     withAudioEnabled()
                 }
             }
-            .start(ContextCompat.getMainExecutor(this)) { recordEvent ->
-                when (recordEvent) {
-                    is VideoRecordEvent.Start -> btnRecord.text = "STOP"
+            .start(ContextCompat.getMainExecutor(this)) { event ->
+                when (event) {
+                    is VideoRecordEvent.Start -> {
+                        shutterInnerCircle.backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.white)
+                    }
                     is VideoRecordEvent.Finalize -> {
-                        if (!recordEvent.hasError()) {
-                            Toast.makeText(baseContext, "Vídeo gravado em $ext ($currentVideoCodec)", Toast.LENGTH_SHORT).show()
-                        }
-                        btnRecord.text = "REC"
+                        Toast.makeText(baseContext, "Vídeo gravado em $ext ($selectedFps FPS)", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
     }
 
-    // Conversão do buffer de câmera em Bitmap para compressão sem perdas (PNG)
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        val plane = image.planes[0]
-        val buffer: ByteBuffer = plane.buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    // Modal de Configurações Categorizado (Engrenagem)
+    private fun showSettingsDialog() {
+        val dialog = BottomSheetDialog(this)
+        val sheetView = layoutInflater.inflate(R.layout.bottom_sheet_settings, null)
+
+        val switchEis: SwitchMaterial = sheetView.findViewById(R.id.switchEis)
+        val switchHdrAi: SwitchMaterial = sheetView.findViewById(R.id.switchHdrAi)
+        val switchNoiseReduction: SwitchMaterial = sheetView.findViewById(R.id.switchNoiseReduction)
+        val rgTimer: RadioGroup = sheetView.findViewById(R.id.rgTimer)
+        val rgPhotoFormat: RadioGroup = sheetView.findViewById(R.id.rgPhotoFormat)
+        val rgVideoCodec: RadioGroup = sheetView.findViewById(R.id.rgVideoCodec)
+        val rgAudioBitrate: RadioGroup = sheetView.findViewById(R.id.rgAudioBitrate)
+        val rgFps: RadioGroup = sheetView.findViewById(R.id.rgFps)
+
+        // Resgatar estados atuais
+        switchEis.isChecked = eisEnabled
+        switchHdrAi.isChecked = hdrEnabled
+        switchNoiseReduction.isChecked = noiseReductionEnabled
+
+        switchEis.setOnCheckedChangeListener { _, isChecked -> eisEnabled = isChecked; setupCamera() }
+        switchHdrAi.setOnCheckedChangeListener { _, isChecked -> hdrEnabled = isChecked; setupCamera() }
+        switchNoiseReduction.setOnCheckedChangeListener { _, isChecked -> noiseReductionEnabled = isChecked; setupCamera() }
+
+        rgTimer.setOnCheckedChangeListener { _, checkedId ->
+            selectedTimerSeconds = when (checkedId) {
+                R.id.rbTimer3s -> 3
+                R.id.rbTimer10s -> 10
+                else -> 0
+            }
+        }
+
+        rgPhotoFormat.setOnCheckedChangeListener { _, checkedId ->
+            currentPhotoFormat = when (checkedId) {
+                R.id.rbPng -> "PNG"
+                R.id.rbRaw -> "RAW"
+                else -> "JPG"
+            }
+        }
+
+        rgVideoCodec.setOnCheckedChangeListener { _, checkedId ->
+            currentVideoCodec = if (checkedId == R.id.rbH265) "H.265" else "H.264"
+        }
+
+        rgAudioBitrate.setOnCheckedChangeListener { _, checkedId ->
+            currentAudioBitrate = when (checkedId) {
+                R.id.rb128k -> 128000
+                R.id.rb320k -> 320000
+                else -> 192000
+            }
+        }
+
+        rgFps.setOnCheckedChangeListener { _, checkedId ->
+            selectedFps = when (checkedId) {
+                R.id.rbFps50 -> 50
+                R.id.rbFps60 -> 60
+                else -> 30
+            }
+            if (isVideoMode) btnQuickResolution.text = "1080p • $selectedFps FPS"
+            setupCamera()
+        }
+
+        dialog.setContentView(sheetView)
+        dialog.show()
     }
 
-    private fun saveBitmapAsPng(bitmap: Bitmap, filename: String) {
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/A05-ProCamera")
-            }
+    // Modal para Troca Rápida de Resoluções Suportadas
+    private fun showResolutionPicker() {
+        val options = if (isBackCamera) {
+            arrayOf("50 MP (8160 x 6120) - Ultra Res", "12.5 MP (4080 x 3060) - Binning", "FHD (1920 x 1080)")
+        } else {
+            arrayOf("8 MP (3264 x 2448) - Máxima", "HD (1280 x 720)")
         }
-        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-        uri?.let {
-            contentResolver.openOutputStream(it).use { out ->
-                if (out != null) {
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+
+        val builder = androidx.appcompat.app.AlertDialog.Builder(this)
+        builder.setTitle("Resolução do Sensor ${if (isBackCamera) "Traseiro" else "Frontal"}")
+        builder.setItems(options) { _, which ->
+            if (isBackCamera) {
+                activeResolution = when (which) {
+                    0 -> Size(8160, 6120)
+                    1 -> Size(4080, 3060)
+                    else -> Size(1920, 1080)
+                }
+            } else {
+                activeResolution = when (which) {
+                    0 -> Size(3264, 2448)
+                    else -> Size(1280, 720)
                 }
             }
-            runOnUiThread {
-                Toast.makeText(baseContext, "Foto PNG Salva!", Toast.LENGTH_SHORT).show()
-            }
+            btnQuickResolution.text = options[which]
+            setupCamera()
         }
+        builder.show()
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
@@ -391,30 +404,5 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
         )
-    }
-}
-
-// Analisador de Visão Computacional (IA rodando nos núcleos rápidos do Helio G85)
-class RealtimeAIEngine(private val listener: (scene: String, avgLuma: Double) -> Unit) : ImageAnalysis.Analyzer {
-
-    override fun analyze(image: ImageProxy) {
-        val buffer = image.planes[0].buffer
-        val data = ByteArray(buffer.remaining())
-        buffer.get(data)
-
-        var totalLuma = 0L
-        for (i in 0 until data.size step 4) { // Passo para otimização de CPU
-            totalLuma += (data[i].toInt() and 0xFF)
-        }
-        val avgLuma = (totalLuma / (data.size / 4.0))
-
-        val scene = when {
-            avgLuma < 35 -> "Pouca Luz (Ativando Otimizador)"
-            avgLuma > 190 -> "Céu Aberto / Contraluz Intensa"
-            else -> "Iluminação Balanceada"
-        }
-
-        listener(scene, avgLuma)
-        image.close()
     }
 }
